@@ -1,6 +1,9 @@
 package get
 
 import (
+	"os"
+	"strings"
+
 	"github.com/red-hat-storage/odf-cli/cmd/odf/root"
 	odfhealth "github.com/red-hat-storage/odf-cli/pkg/health"
 	"github.com/rook/kubectl-rook-ceph/pkg/health"
@@ -15,8 +18,9 @@ var (
 )
 
 var clusterHealth = &cobra.Command{
-	Use:     "health",
-	Short:   "check health of the cluster and common configuration issues",
+	Use:   "health",
+	Short: "print ODF CR status, or detailed status with --verbose flag",
+	Long: `Print the status of each StorageCluster and the CRs it manages. --verbose prints that table first, then the full cluster health report, including Ceph MON, MGR, and OSD checks, pod status, placement groups, and object storage.`,
 	Args:    cobra.NoArgs,
 	Example: "odf get health",
 	PreRun: func(cmd *cobra.Command, args []string) {
@@ -26,16 +30,47 @@ var clusterHealth = &cobra.Command{
 		}
 	},
 	Run: func(cmd *cobra.Command, _ []string) {
-		customChecks := []health.HealthChecker{
-			&odfhealth.NooBaaHealthChecker{
-				Ctx:              cmd.Context(),
-				DynamicClient:    root.ClientSets.Dynamic,
-				K8sClient:        root.ClientSets.Kube,
-				ClusterNamespace: root.StorageClusterNamespace,
-			},
+		namespace := ""
+		namespaceSet := false
+		if flagNamespace := cmd.Flag("namespace"); flagNamespace != nil && flagNamespace.Changed {
+			namespace = flagNamespace.Value.String()
+			namespaceSet = true
 		}
-		health.Health(cmd.Context(), root.ClientSets, root.OperatorNamespace, root.StorageClusterNamespace, healthVerbose, "", healthOutput, customChecks)
+
+		if healthVerbose {
+			// json/yaml reports are the rook check results only. The CR table is text.
+			if healthOutput == "" || healthOutput == "text" {
+				printCRHealthSection(cmd, namespace, namespaceSet)
+			}
+			customChecks := []health.HealthChecker{
+				&odfhealth.NooBaaHealthChecker{
+					Ctx:              cmd.Context(),
+					DynamicClient:    root.ClientSets.Dynamic,
+					K8sClient:        root.ClientSets.Kube,
+					ClusterNamespace: root.StorageClusterNamespace,
+				},
+			}
+			health.Health(cmd.Context(), root.ClientSets, root.OperatorNamespace, root.StorageClusterNamespace, healthVerbose, "", healthOutput, customChecks)
+			return
+		}
+
+		if err := odfhealth.PrintCRHealth(cmd.Context(), root.CtrlClient, namespace, namespaceSet, os.Stdout); err != nil {
+			logging.Fatal(err)
+		}
 	},
+}
+
+func printCRHealthSection(cmd *cobra.Command, namespace string, namespaceSet bool) {
+	logging.Plain("%s", strings.Repeat("=", 72))
+	logging.Plain("StorageCluster CRs")
+	logging.Plain("%s", strings.Repeat("=", 72))
+	logging.Plain("")
+	if err := odfhealth.PrintCRHealth(cmd.Context(), root.CtrlClient, namespace, namespaceSet, os.Stdout); err != nil {
+		logging.Fatal(err)
+	}
+	logging.Plain("")
+	logging.Plain("%s", strings.Repeat("=", 72))
+	logging.Plain("")
 }
 
 func init() {
