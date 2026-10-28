@@ -18,9 +18,9 @@ var (
 )
 
 var clusterHealth = &cobra.Command{
-	Use:   "health",
-	Short: "print ODF CR status, or detailed status with --verbose flag",
-	Long: `Print the status of each StorageCluster and the CRs it manages. --verbose prints that table first, then the full cluster health report, including Ceph MON, MGR, and OSD checks, pod status, placement groups, and object storage.`,
+	Use:     "health",
+	Short:   "print ODF CR status, or detailed status with --verbose flag",
+	Long:    `Print the status of each StorageCluster and the CRs it manages. --verbose prints that table first, then the full cluster health report, including Ceph MON, MGR, and OSD checks, pod status, placement groups, and object storage.`,
 	Args:    cobra.NoArgs,
 	Example: "odf get health",
 	PreRun: func(cmd *cobra.Command, args []string) {
@@ -54,7 +54,7 @@ var clusterHealth = &cobra.Command{
 			return
 		}
 
-		if err := odfhealth.PrintCRHealth(cmd.Context(), root.CtrlClient, namespace, namespaceSet, os.Stdout); err != nil {
+		if err := odfhealth.PrintCRHealth(cmd.Context(), root.CtrlClient, root.ClientSets, root.OperatorNamespace, namespace, namespaceSet, true, os.Stdout); err != nil {
 			logging.Fatal(err)
 		}
 	},
@@ -65,7 +65,7 @@ func printCRHealthSection(cmd *cobra.Command, namespace string, namespaceSet boo
 	logging.Plain("StorageCluster CRs")
 	logging.Plain("%s", strings.Repeat("=", 72))
 	logging.Plain("")
-	if err := odfhealth.PrintCRHealth(cmd.Context(), root.CtrlClient, namespace, namespaceSet, os.Stdout); err != nil {
+	if err := odfhealth.PrintCRHealth(cmd.Context(), root.CtrlClient, root.ClientSets, root.OperatorNamespace, namespace, namespaceSet, false, os.Stdout); err != nil {
 		logging.Fatal(err)
 	}
 	logging.Plain("")

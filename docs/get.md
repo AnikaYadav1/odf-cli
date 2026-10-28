@@ -21,7 +21,7 @@ $ odf get recovery-profile
 
 `odf get health` prints the status of each StorageCluster and the CRs it manages. `odf get health --verbose` checks the health of the Ceph cluster and common configuration issues.
 
-The command lists StorageClusters in all namespaces. Pass `-n` to limit the list to one namespace. StorageClusters in Phase Ignored are skipped. Each remaining StorageCluster gets a header and a table. A kind is listed only if at least one instance exists. Missing or empty phase and message fields print `-`.
+The command lists StorageClusters in all namespaces. Pass `-n` to limit the list to one namespace. StorageClusters in Phase Ignored are skipped. Each remaining StorageCluster gets a header and a table. A kind is listed only if at least one instance exists. Missing or empty phase and message fields print `-`. For StorageConsumer, an empty `status.message` falls back to the age of `status.lastHeartbeat`.
 
 ```bash
 $ odf get health
@@ -36,9 +36,9 @@ CephCluster   ocs-storagecluster-cephcluster                    Ready     Cluste
 Block pool    ocs-storagecluster-cephblockpool                  Failure   Failed to create the block pool. See the operator log for details.
 Filesystem    ocs-storagecluster-cephfilesystem                 Ready     Filesystem created successfully
 Object store  ocs-storagecluster-cephobjectstore                Ready     Object store created successfully
-Consumer      internal                                          Ready     -
-SVG           csi                                               Ready     SVG created successfully
-RNS           ocs-storagecluster-cephblockpool-builtin-implicit Ready     RNS created successfully
+Consumer      internal                                          Ready     Last heartbeat from the client was 20s ago
+SubVolumeGroup csi                                               Ready     Subvolume group created successfully
+RadosNamespace ocs-storagecluster-cephblockpool-builtin-implicit Ready     Rados namespace created successfully
 StorageClient ocs-storagecluster                                Connected -
 NooBaa        noobaa                                            Ready     noobaa operator completed reconcile - system is ready
 ```
