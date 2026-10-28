@@ -164,7 +164,7 @@ func TestPrintCRHealthHeader(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sc).Build()
 
 	var buf bytes.Buffer
-	err := PrintCRHealth(context.Background(), c, "", false, &buf)
+	err := PrintCRHealth(context.Background(), c, nil, "", "", false, false, &buf)
 	require.NoError(t, err)
 
 	out := buf.String()
@@ -187,9 +187,9 @@ func TestPrintCRHealthNoStorageCluster(t *testing.T) {
 	require.NoError(t, ocsv1.AddToScheme(scheme))
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 
-	err := PrintCRHealth(context.Background(), c, "", false, &bytes.Buffer{})
+	err := PrintCRHealth(context.Background(), c, nil, "", "", false, false, &bytes.Buffer{})
 	require.EqualError(t, err, "no StorageCluster found")
 
-	err = PrintCRHealth(context.Background(), c, "openshift-storage", true, &bytes.Buffer{})
+	err = PrintCRHealth(context.Background(), c, nil, "", "openshift-storage", true, false, &bytes.Buffer{})
 	require.EqualError(t, err, `no StorageCluster found in namespace "openshift-storage"`)
 }

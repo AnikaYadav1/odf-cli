@@ -7,8 +7,11 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	ocsv1 "github.com/red-hat-storage/ocs-operator/api/v4/v1"
+	rookhealth "github.com/rook/kubectl-rook-ceph/pkg/health"
+	"github.com/rook/kubectl-rook-ceph/pkg/k8sutil"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -25,6 +28,7 @@ type kindSpec struct {
 	namespaced            bool
 	observedPath          []string
 	messageFromConditions bool
+	heartbeatFallback     bool
 }
 
 // managedKinds is the fixed list of CR types StorageCluster manages.
@@ -34,9 +38,9 @@ var managedKinds = []kindSpec{
 	{component: "Block pool", group: "ceph.rook.io", version: "v1", kind: "CephBlockPool", namespaced: true, observedPath: []string{"status", "phase"}},
 	{component: "Filesystem", group: "ceph.rook.io", version: "v1", kind: "CephFilesystem", namespaced: true, observedPath: []string{"status", "phase"}},
 	{component: "Object store", group: "ceph.rook.io", version: "v1", kind: "CephObjectStore", namespaced: true, observedPath: []string{"status", "phase"}},
-	{component: "Consumer", group: "ocs.openshift.io", version: "v1alpha1", kind: "StorageConsumer", namespaced: true, observedPath: []string{"status", "state"}},
-	{component: "SVG", group: "ceph.rook.io", version: "v1", kind: "CephFilesystemSubVolumeGroup", namespaced: true, observedPath: []string{"status", "phase"}},
-	{component: "RNS", group: "ceph.rook.io", version: "v1", kind: "CephBlockPoolRadosNamespace", namespaced: true, observedPath: []string{"status", "phase"}},
+	{component: "Consumer", group: "ocs.openshift.io", version: "v1alpha1", kind: "StorageConsumer", namespaced: true, observedPath: []string{"status", "state"}, heartbeatFallback: true},
+	{component: "SubVolumeGroup", group: "ceph.rook.io", version: "v1", kind: "CephFilesystemSubVolumeGroup", namespaced: true, observedPath: []string{"status", "phase"}},
+	{component: "RadosNamespace", group: "ceph.rook.io", version: "v1", kind: "CephBlockPoolRadosNamespace", namespaced: true, observedPath: []string{"status", "phase"}},
 	{component: "NFS", group: "ceph.rook.io", version: "v1", kind: "CephNFS", namespaced: true, observedPath: []string{"status", "phase"}},
 	{component: "NVMe-oF", group: "ceph.rook.io", version: "v1", kind: "CephNVMeOFGateway", namespaced: true, observedPath: []string{"status", "phase"}},
 	{component: "StorageClient", group: "ocs.openshift.io", version: "v1alpha1", kind: "StorageClient", namespaced: false, observedPath: []string{"status", "phase"}},
@@ -45,8 +49,9 @@ var managedKinds = []kindSpec{
 
 // PrintCRHealth prints one CR status section per StorageCluster.
 // Each section has a header (name, namespace, phase, mode) and a table of managed CRs.
+// If includeCephStatus is true, Ceph cluster health is printed after the table.
 // If namespaceSet is true, only that namespace is listed; otherwise all namespaces are searched.
-func PrintCRHealth(ctx context.Context, c client.Client, namespace string, namespaceSet bool, out io.Writer) error {
+func PrintCRHealth(ctx context.Context, c client.Client, clientsets *k8sutil.Clientsets, operatorNamespace, namespace string, namespaceSet, includeCephStatus bool, out io.Writer) error {
 	clusters, err := listStorageClusters(ctx, c, namespace, namespaceSet)
 	if err != nil {
 		return err
@@ -59,20 +64,34 @@ func PrintCRHealth(ctx context.Context, c client.Client, namespace string, names
 	}
 
 	for i := range clusters {
-		// Separate StorageCluster sections with a blank line, a banner, and another
-		// blank line. Skip it for the first cluster so the output does not start
-		// with a leading separator.
-		if i > 0 {
-			fmt.Fprintln(out)
-			fmt.Fprintln(out, strings.Repeat("=", 72))
-			fmt.Fprintln(out)
+		if i > 0 && !includeCephStatus {
+			printSectionEnd(out)
 		}
 		printClusterHeader(out, clusters[i])
 		if err := printManagedTable(ctx, c, clusters[i], out); err != nil {
 			return err
 		}
+		if includeCephStatus && clientsets != nil {
+			fmt.Fprintln(out)
+			printCephStatus(ctx, clientsets, operatorNamespace, clusters[i].Namespace, out)
+			printSectionEnd(out)
+		}
 	}
 	return nil
+}
+
+func printCephStatus(ctx context.Context, clientsets *k8sutil.Clientsets, operatorNamespace, clusterNamespace string, out io.Writer) {
+	fmt.Fprintln(out, strings.Repeat("=", 72))
+	fmt.Fprintln(out, "Ceph status")
+	fmt.Fprintln(out, strings.Repeat("=", 72))
+	status, err := rookhealth.UnMarshalCephStatus(ctx, clientsets, operatorNamespace, clusterNamespace)
+	rookhealth.PrintCheckResult(rookhealth.CheckCephClusterHealth(status, err), false)
+}
+
+func printSectionEnd(out io.Writer) {
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, strings.Repeat("=", 72))
+	fmt.Fprintln(out)
 }
 
 // listStorageClusters lists all StorageClusters present on the cluster.
@@ -198,7 +217,7 @@ func matchingStorageClients(items []unstructured.Unstructured, storageClusterNam
 // rowFields returns the four table cells for one CR: COMPONENT from kindSpec,
 // NAME from metadata.name, OBSERVED from the nested status field, and STATUS MESSAGE.
 func rowFields(spec kindSpec, obj unstructured.Unstructured) (component, name, observed, message string) {
-	return spec.component, obj.GetName(), nestedStringOrDash(obj.Object, spec.observedPath...), statusMessage(obj, spec.messageFromConditions)
+	return spec.component, obj.GetName(), nestedStringOrDash(obj.Object, spec.observedPath...), statusMessage(obj, spec, time.Now())
 }
 
 // nestedStringOrDash reads a nested string field (for example status.phase).
@@ -213,11 +232,49 @@ func nestedStringOrDash(obj map[string]interface{}, fields ...string) string {
 
 // statusMessage returns status.message for most kinds.
 // NooBaa has no status.message, so fromConditions reads status.conditions[].message instead.
-func statusMessage(obj unstructured.Unstructured, fromConditions bool) string {
-	if fromConditions {
+// StorageConsumer falls back to the age of status.lastHeartbeat when message is empty.
+func statusMessage(obj unstructured.Unstructured, spec kindSpec, now time.Time) string {
+	if spec.messageFromConditions {
 		return conditionMessage(obj.Object)
 	}
-	return nestedStringOrDash(obj.Object, "status", "message")
+	msg := nestedStringOrDash(obj.Object, "status", "message")
+	if msg != missingValue || !spec.heartbeatFallback {
+		return msg
+	}
+	return lastHeartbeatMessage(obj.Object, now)
+}
+
+// lastHeartbeatMessage formats status.lastHeartbeat as
+// "Last heartbeat from the client was 20s ago".
+// Missing, empty, or unparseable timestamps return "-".
+func lastHeartbeatMessage(obj map[string]interface{}, now time.Time) string {
+	s, found, err := unstructured.NestedString(obj, "status", "lastHeartbeat")
+	if err != nil || !found || s == "" {
+		return missingValue
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil || t.IsZero() {
+		return missingValue
+	}
+	return "Last heartbeat from the client was " + formatAge(now.Sub(t))
+}
+
+// formatAge turns a duration into a short age string: 20s, 5m, 3h, or 2d.
+// Negative durations (clock skew) are shown as 0s ago.
+func formatAge(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }
 
 // conditionMessage returns the first non-empty status.conditions[].message.
